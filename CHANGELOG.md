@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+
+- `ERC20Permit`: Add `isValidPermit`, a view helper that checks a permit signature against the current EIP-712 domain (including chain ID), nonce and deadline without consuming the nonce, so callers can pre-verify a permit before submitting it.
 
 ## 5.7.0 (2026-07-29)
 

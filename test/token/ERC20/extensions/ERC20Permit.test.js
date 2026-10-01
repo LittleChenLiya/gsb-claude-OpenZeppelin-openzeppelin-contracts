@@ -109,4 +109,102 @@ describe('ERC20Permit', function () {
         .withArgs(deadline);
     });
   });
+
+  describe('isValidPermit', function () {
+    const value = 42n;
+    const nonce = 0n;
+    const maxDeadline = ethers.MaxUint256;
+
+    beforeEach(function () {
+      this.buildData = (contract, deadline = maxDeadline, chainId) =>
+        getDomain(contract).then(domain => ({
+          domain: chainId === undefined ? domain : { ...domain, chainId },
+          types: { Permit },
+          message: {
+            owner: this.owner.address,
+            spender: this.spender.address,
+            value,
+            nonce,
+            deadline,
+          },
+        }));
+    });
+
+    it('accepts a correct signature without consuming the nonce', async function () {
+      const { v, r, s } = await this.buildData(this.token)
+        .then(({ domain, types, message }) => this.owner.signTypedData(domain, types, message))
+        .then(ethers.Signature.from);
+
+      // pre-check passes and is read-only
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, maxDeadline, v, r, s)).to.be.true;
+      expect(await this.token.nonces(this.owner)).to.equal(0n);
+
+      // the same signature is still usable afterwards: the check did not consume the nonce
+      await this.token.permit(this.owner, this.spender, value, maxDeadline, v, r, s);
+
+      expect(await this.token.nonces(this.owner)).to.equal(1n);
+      expect(await this.token.allowance(this.owner, this.spender)).to.equal(value);
+    });
+
+    it('rejects a signature for a different chain id (cross-chain domain)', async function () {
+      const otherChainId = (await ethers.provider.getNetwork()).chainId + 1n;
+
+      const { v, r, s, serialized } = await this.buildData(this.token, maxDeadline, otherChainId)
+        .then(({ domain, types, message }) => this.owner.signTypedData(domain, types, message))
+        .then(ethers.Signature.from);
+
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, maxDeadline, v, r, s)).to.be.false;
+
+      const recovered = await this.buildData(this.token).then(({ domain, types, message }) =>
+        ethers.verifyTypedData(domain, types, message, serialized),
+      );
+
+      await expect(this.token.permit(this.owner, this.spender, value, maxDeadline, v, r, s))
+        .to.be.revertedWithCustomError(this.token, 'ERC2612InvalidSigner')
+        .withArgs(recovered, this.owner);
+    });
+
+    it('rejects an expired signature', async function () {
+      const deadline = (await time.clock.timestamp()) - time.duration.weeks(1);
+
+      const { v, r, s } = await this.buildData(this.token, deadline)
+        .then(({ domain, types, message }) => this.owner.signTypedData(domain, types, message))
+        .then(ethers.Signature.from);
+
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, deadline, v, r, s)).to.be.false;
+
+      await expect(this.token.permit(this.owner, this.spender, value, deadline, v, r, s))
+        .to.be.revertedWithCustomError(this.token, 'ERC2612ExpiredSignature')
+        .withArgs(deadline);
+    });
+
+    it('rejects a replayed (already submitted) signature', async function () {
+      const { v, r, s, serialized } = await this.buildData(this.token)
+        .then(({ domain, types, message }) => this.owner.signTypedData(domain, types, message))
+        .then(ethers.Signature.from);
+
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, maxDeadline, v, r, s)).to.be.true;
+
+      await this.token.permit(this.owner, this.spender, value, maxDeadline, v, r, s);
+
+      // nonce was consumed: the same signature no longer matches
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, maxDeadline, v, r, s)).to.be.false;
+
+      const recovered = await this.buildData(this.token).then(({ domain, types, message }) =>
+        ethers.verifyTypedData(domain, types, { ...message, nonce: nonce + 1n }, serialized),
+      );
+
+      await expect(this.token.permit(this.owner, this.spender, value, maxDeadline, v, r, s))
+        .to.be.revertedWithCustomError(this.token, 'ERC2612InvalidSigner')
+        .withArgs(recovered, this.owner);
+    });
+
+    it('rejects a signature from another account', async function () {
+      const { v, r, s } = await this.buildData(this.token)
+        .then(({ domain, types, message }) => this.other.signTypedData(domain, types, message))
+        .then(ethers.Signature.from);
+
+      expect(await this.token.isValidPermit(this.owner, this.spender, value, maxDeadline, v, r, s)).to.be.false;
+    });
+  });
 });
