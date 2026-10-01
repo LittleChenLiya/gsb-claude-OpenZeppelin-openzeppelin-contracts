@@ -87,6 +87,7 @@ interface IAccessManager {
     error AccessManagerUnauthorizedConsume(address target);
     error AccessManagerUnauthorizedCancel(address msgsender, address caller, address target, bytes4 selector);
     error AccessManagerInvalidInitialAdmin(address initialAdmin);
+    error AccessManagerInvalidBatchLength(uint256 targetsLength, uint256 selectorsLength);
 
     /**
      * @dev Check if an address (`caller`) is authorised to call a given function on a given contract directly (with

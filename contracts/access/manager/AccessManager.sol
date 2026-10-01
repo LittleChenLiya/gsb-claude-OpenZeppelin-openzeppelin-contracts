@@ -164,6 +164,50 @@ contract AccessManager is Context, Multicall, IAccessManager {
         }
     }
 
+    /**
+     * @dev Batch read-only preview of {canCall} for a given `caller` over multiple `(target, selector)` pairs.
+     *
+     * For each item, this function returns whether the call can be executed immediately and the earliest
+     * timepoint at which it can be executed:
+     *
+     * * `immediate[i] == true`: the call can be executed right away and `executableAt[i]` is the current timestamp.
+     * * `immediate[i] == false` and `executableAt[i] != 0`: the caller is authorized but must go through the
+     * {schedule} & {execute} workflow, and `executableAt[i]` is the earliest timepoint at which the operation
+     * can be executed if scheduled now.
+     * * `executableAt[i] == 0`: the caller is not authorized to perform that call.
+     *
+     * This is a pure preview: it never schedules operations nor modifies roles, and an unauthorized item does
+     * not affect the results of the other items.
+     *
+     * Requirements:
+     *
+     * * `targets` and `selectors` must have the same length.
+     */
+    function canCallBatch(
+        address caller,
+        address[] calldata targets,
+        bytes4[] calldata selectors
+    ) public view virtual returns (bool[] memory immediate, uint48[] memory executableAt) {
+        if (targets.length != selectors.length) {
+            revert AccessManagerInvalidBatchLength(targets.length, selectors.length);
+        }
+
+        uint256 length = targets.length;
+        immediate = new bool[](length);
+        executableAt = new uint48[](length);
+
+        uint48 timestamp = Time.timestamp();
+        for (uint256 i = 0; i < length; ++i) {
+            (bool isImmediate, uint32 delay) = canCall(caller, targets[i], selectors[i]);
+            if (isImmediate) {
+                immediate[i] = true;
+                executableAt[i] = timestamp;
+            } else if (delay != 0) {
+                executableAt[i] = timestamp + delay;
+            }
+        }
+    }
+
     /// @inheritdoc IAccessManager
     function expiration() public view virtual returns (uint32) {
         return 1 weeks;
