@@ -74,6 +74,35 @@ interface IERC20Permit {
     ) external;
 
     /**
+     * @dev Checks whether a signed permit is currently valid for `owner`, without consuming the
+     * nonce or modifying state. Returns `true` if the permit can be submitted to {permit}.
+     *
+     * The check verifies that:
+     *
+     * - the signature deadline has not expired,
+     * - `nonce` is the current nonce of `owner` (see {nonces}),
+     * - the EIP-712 domain (name, version, chain id and verifying contract) matches this contract,
+     * - the signature was produced by `owner` over the permit payload.
+     *
+     * A signature produced for a different chain id (cross-chain replay), with a stale nonce, or
+     * by a signer other than `owner` recovers to a different signer address and is rejected.
+     *
+     * NOTE: A successful check does not guarantee that a later call to {permit} will succeed, since
+     * the nonce may be consumed in the meantime (e.g. by a frontrunning submission). Callers should
+     * allow {permit} calls to fail gracefully.
+     */
+    function permitCheck(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 nonce,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external view returns (bool);
+
+    /**
      * @dev Returns the current nonce for `owner`. This value must be
      * included whenever a signature is generated for {permit}.
      *
