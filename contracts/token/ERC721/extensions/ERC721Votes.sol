@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// OpenZeppelin Contracts (last updated v5.5.0) (token/ERC721/extensions/ERC721Votes.sol)
+// OpenZeppelin Contracts (last updated v5.7.0) (token/ERC721/extensions/ERC721Votes.sol)
 
 pragma solidity ^0.8.24;
 
 import {Votes} from "../../../governance/utils/Votes.sol";
+import {SafeCast} from "../../../utils/math/SafeCast.sol";
 import {ERC721} from "../ERC721.sol";
 
 /**
@@ -35,6 +36,30 @@ abstract contract ERC721Votes is ERC721, Votes {
      */
     function _getVotingUnits(address account) internal view virtual override returns (uint256) {
         return balanceOf(account);
+    }
+
+    /**
+     * @dev Returns the difference in the amount of votes that `account` had between two past timepoints. The result is
+     * the voting balance at `newTimepoint` minus the voting balance at `oldTimepoint`, so a positive value indicates
+     * that `account` gained votes over the interval, while a negative value indicates that it lost votes.
+     *
+     * This is a convenience view over {getPastVotes} that is useful, for example, to audit the impact of a batch of
+     * mints, delegations and transfers that took place between two voting snapshots.
+     *
+     * Requirements:
+     *
+     * - Both timepoints must be in the past. If operating using block numbers, the blocks must be already mined.
+     * - Historical snapshots are immutable, so votes that are transferred or redelegated after a timepoint do not
+     * affect the value returned for it.
+     */
+    function getPastVotesDifference(
+        address account,
+        uint256 oldTimepoint,
+        uint256 newTimepoint
+    ) public view virtual returns (int256) {
+        return
+            SafeCast.toInt256(getPastVotes(account, newTimepoint)) -
+            SafeCast.toInt256(getPastVotes(account, oldTimepoint));
     }
 
     /**
