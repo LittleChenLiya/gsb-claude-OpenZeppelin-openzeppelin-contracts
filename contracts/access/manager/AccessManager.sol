@@ -165,6 +165,30 @@ contract AccessManager is Context, Multicall, IAccessManager {
     }
 
     /// @inheritdoc IAccessManager
+    function canCallBatch(
+        address[] calldata callers,
+        address[] calldata targets,
+        bytes4[] calldata selectors
+    ) public view virtual returns (CallPreview[] memory results) {
+        uint256 length = callers.length;
+        if (targets.length != length || selectors.length != length) {
+            revert AccessManagerInvalidBatchLength(length, targets.length, selectors.length);
+        }
+
+        results = new CallPreview[](length);
+        for (uint256 i = 0; i < length; ++i) {
+            (bool immediate, uint32 delay) = canCall(callers[i], targets[i], selectors[i]);
+            bool allowed = immediate || delay > 0;
+            results[i] = CallPreview({
+                allowed: allowed,
+                immediate: immediate,
+                delay: delay,
+                executableAt: allowed ? Time.timestamp() + delay : 0
+            });
+        }
+    }
+
+    /// @inheritdoc IAccessManager
     function expiration() public view virtual returns (uint32) {
         return 1 weeks;
     }

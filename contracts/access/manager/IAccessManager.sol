@@ -87,6 +87,21 @@ interface IAccessManager {
     error AccessManagerUnauthorizedConsume(address target);
     error AccessManagerUnauthorizedCancel(address msgsender, address caller, address target, bytes4 selector);
     error AccessManagerInvalidInitialAdmin(address initialAdmin);
+    error AccessManagerInvalidBatchLength(uint256 callersLength, uint256 targetsLength, uint256 selectorsLength);
+
+    /**
+     * @dev Result of a batch permission preview for a single call.
+     */
+    struct CallPreview {
+        // Whether the caller is authorized to perform the call (role granted and target open).
+        bool allowed;
+        // Whether the call can be executed immediately without scheduling.
+        bool immediate;
+        // Minimum delay that must elapse between scheduling and execution. 0 if denied or immediate.
+        uint32 delay;
+        // Earliest timestamp at which the call can be executed. 0 if not authorized.
+        uint48 executableAt;
+    }
 
     /**
      * @dev Check if an address (`caller`) is authorised to call a given function on a given contract directly (with
@@ -118,6 +133,25 @@ interface IAccessManager {
         address target,
         bytes4 selector
     ) external view returns (bool allowed, uint32 delay);
+
+    /**
+     * @dev Batch version of {canCall} that previews the permissions and earliest executable
+     * time for a list of calls. Results are returned in the same order as the inputs, and a
+     * lack of permission on one item does not affect the preview of the others.
+     *
+     * This is a read-only preview: it does not schedule any operation, modify roles, or alter
+     * any other state. The `executableAt` value is computed from the current block timestamp
+     * and the required execution delay; it is 0 for calls that are not authorized.
+     *
+     * Requirements:
+     *
+     * - `callers`, `targets` and `selectors` must have the same length.
+     */
+    function canCallBatch(
+        address[] calldata callers,
+        address[] calldata targets,
+        bytes4[] calldata selectors
+    ) external view returns (CallPreview[] memory results);
 
     /**
      * @dev Expiration delay for scheduled proposals. Defaults to 1 week.
