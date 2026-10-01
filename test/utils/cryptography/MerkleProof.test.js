@@ -214,6 +214,168 @@ describe('MerkleProof', function () {
           ).to.be.revertedWithCustomError(this.mock, 'MerkleProofInvalidMultiproof');
         });
       });
+
+      describe('multiProofStructuralCheck', function () {
+        // Sentinel returned by the precheck when the multiproof structure is valid.
+        const VALID = ethers.MaxUint256;
+
+        it('returns max uint256 for a valid Merkle multi proof', async function () {
+          const merkleTree = this.makeTree('abcdef');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('bdf'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          // The precheck reports a valid structure for both memory and calldata.
+          expect(await this.mock.$multiProofStructuralCheck(proof, proofFlags, hashes)).to.equal(VALID);
+          expect(await this.mock.$multiProofStructuralCheckCalldata(proof, proofFlags, hashes)).to.equal(VALID);
+          // The precheck does not replace hash verification: the original interface still accepts the proof.
+          expect(await this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.true;
+          expect(await this.mock.$multiProofVerifyCalldata(proof, proofFlags, root, hashes)).to.be.true;
+        });
+
+        it('locates the missing proof node when a proof node is removed', async function () {
+          const merkleTree = this.makeTree('abcdef');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('bdf'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          // Remove the last proof node: the proof array is one node short.
+          const shortProof = proof.slice(0, -1);
+
+          // The precheck locates the first missing proof index (== shortProof.length).
+          expect(await this.mock.$multiProofStructuralCheck(shortProof, proofFlags, hashes)).to.equal(
+            shortProof.length,
+          );
+          expect(await this.mock.$multiProofStructuralCheckCalldata(shortProof, proofFlags, hashes)).to.equal(
+            shortProof.length,
+          );
+          // The original verification interface rejects the malformed proof.
+          await expect(this.mock.$processMultiProof(shortProof, proofFlags, hashes)).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+          await expect(this.mock.$multiProofVerify(shortProof, proofFlags, root, hashes)).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+        });
+
+        it('locates the first failing flag step when an extra flag is appended', async function () {
+          const merkleTree = this.makeTree('abcdef');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('bdf'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          // Append an extra `true` flag: the flag sequence consumes more values than the leaves and
+          // produced hashes can provide, so the main queue underflows at the last step.
+          const extraFlags = [...proofFlags, true];
+
+          // The precheck locates the first flag step that cannot be executed.
+          expect(await this.mock.$multiProofStructuralCheck(proof, extraFlags, hashes)).to.equal(proofFlags.length);
+          expect(await this.mock.$multiProofStructuralCheckCalldata(proof, extraFlags, hashes)).to.equal(
+            proofFlags.length,
+          );
+          // The original verification interface rejects the malformed proof.
+          await expect(this.mock.$processMultiProof(proof, extraFlags, hashes)).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+          await expect(this.mock.$multiProofVerify(proof, extraFlags, root, hashes)).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+        });
+
+        it('locates the first extra proof node when proof is too long', async function () {
+          const merkleTree = this.makeTree('abcdef');
+
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('bdf'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          // Append an extra proof node that is never consumed by any flag.
+          const extraProof = [...proof, random.bytes32()];
+
+          // The precheck locates the first extra proof node (at index proof.length).
+          expect(await this.mock.$multiProofStructuralCheck(extraProof, proofFlags, hashes)).to.equal(proof.length);
+          expect(await this.mock.$multiProofStructuralCheckCalldata(extraProof, proofFlags, hashes)).to.equal(
+            proof.length,
+          );
+          // The original verification interface rejects the malformed proof.
+          await expect(this.mock.$processMultiProof(extraProof, proofFlags, hashes)).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+        });
+
+        it('returns max uint256 for the no-op multiproofs', async function () {
+          const single = this.makeTree('a');
+          const singleRoot = single.root;
+          const {
+            proof: singleProof,
+            proofFlags: singleFlags,
+            leaves: singleLeaves,
+          } = single.getMultiProof(toLeaves('a'));
+          const singleHashes = singleLeaves.map(e => single.leafHash(e));
+
+          expect(await this.mock.$multiProofStructuralCheck(singleProof, singleFlags, singleHashes)).to.equal(VALID);
+          expect(await this.mock.$multiProofStructuralCheckCalldata(singleProof, singleFlags, singleHashes)).to.equal(
+            VALID,
+          );
+
+          // Empty leaves: proof[0] is the root.
+          expect(await this.mock.$multiProofStructuralCheck([singleRoot], [], [])).to.equal(VALID);
+          expect(await this.mock.$multiProofStructuralCheckCalldata([singleRoot], [], [])).to.equal(VALID);
+        });
+
+        it('agrees with processMultiProof on random valid and mutated multiproofs', async function () {
+          this.timeout(120000);
+          for (let t = 0; t < 20; t++) {
+            const n = 2 + Math.floor(Math.random() * 10);
+            const letters = 'abcdefghijklmnopqrstuvwxyz';
+            const merkleTree = this.makeTree(letters.slice(0, n));
+            const numProven = 1 + Math.floor(Math.random() * n);
+            const proven = letters.slice(0, numProven);
+            const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves(proven));
+            const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+            // A valid multiproof passes the precheck and rebuilds the root.
+            expect(await this.mock.$multiProofStructuralCheck(proof, proofFlags, hashes)).to.equal(VALID);
+            expect(await this.mock.$processMultiProof(proof, proofFlags, hashes)).to.equal(merkleTree.root);
+
+            // Mutated multiproofs: the precheck must locate the failure and processMultiProof must revert.
+            for (let m = 0; m < 10; m++) {
+              const mutProof = [...proof];
+              const mutFlags = [...proofFlags];
+              const mutLeaves = [...hashes];
+              const mutation = Math.floor(Math.random() * 4);
+              if (mutation === 0 && mutProof.length > 0) {
+                mutProof.splice(Math.floor(Math.random() * mutProof.length), 1);
+              } else if (mutation === 1) {
+                mutProof.push(random.bytes32());
+              } else if (mutation === 2 && mutFlags.length > 0) {
+                mutFlags.splice(Math.floor(Math.random() * mutFlags.length), 1);
+              } else {
+                mutFlags.push(Math.random() < 0.5);
+              }
+              const precheck = await this.mock.$multiProofStructuralCheck(mutProof, mutFlags, mutLeaves);
+              let reverted = false;
+              try {
+                await this.mock.$processMultiProof(mutProof, mutFlags, mutLeaves);
+              } catch {
+                reverted = true;
+              }
+              if (reverted) {
+                expect(precheck).to.not.equal(VALID);
+              } else {
+                expect(precheck).to.equal(VALID);
+              }
+            }
+          }
+        });
+      });
     });
   }
 });

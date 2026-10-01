@@ -136,4 +136,110 @@ library MerkleProof {
         }
     }
 <% } -%>
+<%- for (const { suffix, location } of [{ suffix: '', location: 'memory' }, { suffix: 'Calldata', location: 'calldata' }]) { %>
+    /**
+     * @dev Performs a structural precheck of a multiproof (`proof`, `proofFlags` and `leaves`)
+     * without performing any hash verification. This is a purely structural check: it only inspects
+     * the lengths of the arrays and the flags to locate the first proof node that cannot be consumed
+     * by the reconstruction queue. It does not replace {processMultiProof} or {multiProofVerify},
+     * which must still be called to verify the hashes against a root.
+     *
+     * Returns the index of the first structurally invalid proof node, or `type(uint256).max` if the
+     * multiproof structure is valid:
+     * - if a proof node is missing (a false flag is encountered with no proof node remaining), the
+     *   returned index is `proof.length` (the first unreadable proof index);
+     * - if a proof node is extra (it is never consumed by any flag), the returned index is the
+     *   position of the first extra proof node;
+     * - if the flag sequence underflows the main queue (too many `true` flags early), the returned
+     *   index is the first flag step that cannot be executed.
+     *
+     * This version handles multiproofs in <%= location %>.
+     */
+    function multiProofStructuralCheck<%= suffix %>(<%= it.args(`bytes32[] ${location} proof`, `bool[] ${location} proofFlags`, `bytes32[] memory leaves`) %>) internal pure returns (uint256 invalidProofIndex) {
+        uint256 leavesLen = leaves.length;
+        uint256 proofFlagsLen = proofFlags.length;
+        uint256 proofLen = proof.length;
+
+        // A multiproof without flags has no queue to traverse. {processMultiProof} handles two
+        // no-op cases: a single leaf (returns leaves[0]) and the empty set (returns proof[0]).
+        if (proofFlagsLen == 0) {
+            if ((leavesLen == 1 && proofLen == 0) || (leavesLen == 0 && proofLen == 1)) {
+                return type(uint256).max;
+            }
+            // The structure is unbalanced. The only proof node that could be consumed is proof[0]
+            // (only when there are no leaves): it is missing if proof is empty, otherwise extra
+            // nodes start at index 1. When leaves are present, proof is never consumed, so any
+            // proof node is extra (the first is at index 0).
+            if (leavesLen == 0) {
+                return proofLen == 0 ? 0 : 1;
+            }
+            return 0;
+        }
+
+        // Simulate the queue, mirroring {processMultiProof}, to locate the first element that
+        // breaks the structure. The queue starts with `leaves` and produces `hashes`; each false
+        // flag consumes a node from `proof`.
+        uint256 leafPos = 0;
+        uint256 hashPos = 0;
+        uint256 proofPos = 0;
+        for (uint256 i = 0; i < proofFlagsLen; ++i) {
+            // Pop `a` from the main queue (next leaf if available, otherwise a produced hash).
+            if (leafPos < leavesLen) {
+                ++leafPos;
+            } else if (hashPos < i) {
+                ++hashPos;
+            } else {
+                // The main queue is exhausted: the flag sequence consumes more values than the
+                // leaves and produced hashes can provide. `i` is the first flag step that cannot
+                // be executed.
+                return i;
+            }
+
+            // Pop `b`: either another main-queue value (flag true) or a proof node (flag false).
+            if (proofFlags[i]) {
+                if (leafPos < leavesLen) {
+                    ++leafPos;
+                } else if (hashPos < i) {
+                    ++hashPos;
+                } else {
+                    return i;
+                }
+            } else {
+                if (proofPos < proofLen) {
+                    ++proofPos;
+                } else {
+                    // A proof node is missing: the first unreadable proof index is proofLen.
+                    return proofLen;
+                }
+            }
+        }
+
+        // All flags executed without underflow. Any leftover proof node is an extra node that is
+        // never consumed (the first such node is at index proofPos).
+        if (proofPos < proofLen) {
+            return proofPos;
+        }
+
+        // Any leftover leaf means the balance equation is broken (more leaves than the flags can
+        // consume). The proof array has no valid node at the returned position.
+        if (leafPos < leavesLen) {
+            return proofLen;
+        }
+
+        // The balance equation must hold. If it does not, the structure is invalid even though the
+        // traversal completed without underflow (e.g. too many leaves for the flags to consume).
+        // The "correct" proof length is `proofFlagsLen + 1 - leavesLen`: if proof is shorter, the
+        // first missing proof index is `proofLen`; if longer, the first extra proof index is the
+        // correct length (clamped to 0 when there are more leaves than the flags can consume).
+        if (leavesLen + proofLen != proofFlagsLen + 1) {
+            uint256 correctLen = proofFlagsLen + 1 > leavesLen ? proofFlagsLen + 1 - leavesLen : 0;
+            if (proofLen < correctLen) {
+                return proofLen;
+            }
+            return correctLen;
+        }
+
+        return type(uint256).max;
+    }
+<% } -%>
 }

@@ -58,4 +58,20 @@ library MerkleProofCustomHashMock {
     ) internal view returns (bytes32) {
         return MerkleProof.processMultiProofCalldata(proof, proofFlags, leaves, customHash);
     }
+
+    function multiProofStructuralCheck(
+        bytes32[] calldata proof,
+        bool[] calldata proofFlags,
+        bytes32[] calldata leaves
+    ) internal pure returns (uint256) {
+        return MerkleProof.multiProofStructuralCheck(proof, proofFlags, leaves);
+    }
+
+    function multiProofStructuralCheckCalldata(
+        bytes32[] calldata proof,
+        bool[] calldata proofFlags,
+        bytes32[] calldata leaves
+    ) internal pure returns (uint256) {
+        return MerkleProof.multiProofStructuralCheckCalldata(proof, proofFlags, leaves);
+    }
 }
