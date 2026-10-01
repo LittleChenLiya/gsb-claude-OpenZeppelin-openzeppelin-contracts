@@ -38,6 +38,29 @@ abstract contract ERC721Votes is ERC721, Votes {
     }
 
     /**
+     * @dev Returns the difference in voting power for `account` between two past timepoints.
+     *
+     * The difference is computed as `getPastVotes(account, toTimepoint) - getPastVotes(account, fromTimepoint)`.
+     * A positive value indicates an increase in voting power, while a negative value indicates a decrease.
+     *
+     * NOTE: Both `fromTimepoint` and `toTimepoint` must be in the past. Historical checkpoints are never
+     * modified by transfers or delegation changes, so the old snapshot keeps its original value.
+     *
+     * Requirements:
+     *
+     * - Both `fromTimepoint` and `toTimepoint` must be in the past (i.e. strictly less than the current clock).
+     */
+    function getPastVotesDifference(
+        address account,
+        uint256 fromTimepoint,
+        uint256 toTimepoint
+    ) public view virtual returns (int256) {
+        int256 fromVotes = int256(getPastVotes(account, fromTimepoint));
+        int256 toVotes = int256(getPastVotes(account, toTimepoint));
+        return toVotes - fromVotes;
+    }
+
+    /**
      * @dev See {ERC721-_increaseBalance}. We need that to account tokens that were minted in batch.
      */
     function _increaseBalance(address account, uint128 amount) internal virtual override {

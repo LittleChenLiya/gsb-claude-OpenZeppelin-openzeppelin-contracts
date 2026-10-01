@@ -192,6 +192,126 @@ describe('ERC721Votes', function () {
           expect(await this.votes.getPastVotes(this.recipient, timepoint)).to.equal(this.recipientVotes);
         });
       });
+
+      describe('vote difference', function () {
+        beforeEach(async function () {
+          // mint 3 tokens to holder
+          await this.votes.$_mint(this.holder, tokens[1]);
+          await this.votes.$_mint(this.holder, tokens[2]);
+          await this.votes.$_mint(this.holder, tokens[3]);
+        });
+
+        it('returns the vote difference between two past timepoints after transfer', async function () {
+          // holder delegates to other1
+          const delegateTx = await this.votes.connect(this.holder).delegate(this.other1);
+          const t1 = await time.clockFromReceipt[mode](delegateTx);
+
+          // advance blocks
+          await mine(2);
+
+          // holder transfers 1 token to other2
+          const transferTx = await this.votes.connect(this.holder).transferFrom(this.holder, this.other2, tokens[1]);
+          const t2 = await time.clockFromReceipt[mode](transferTx);
+
+          // advance blocks so that t1 and t2 are in the past
+          await mine(2);
+
+          // old snapshot keeps its original value (3 votes)
+          expect(await this.votes.getPastVotes(this.other1, t1)).to.equal(3n);
+          // new snapshot reflects the transfer (2 votes)
+          expect(await this.votes.getPastVotes(this.other1, t2)).to.equal(2n);
+
+          // difference: new - old = 2 - 3 = -1
+          expect(await this.votes.getPastVotesDifference(this.other1, t1, t2)).to.equal(-1n);
+          // reverse direction: old - new = 3 - 2 = 1
+          expect(await this.votes.getPastVotesDifference(this.other1, t2, t1)).to.equal(1n);
+        });
+
+        it('returns the vote difference between two past timepoints after delegation change', async function () {
+          // holder delegates to other1
+          const delegateTx1 = await this.votes.connect(this.holder).delegate(this.other1);
+          const t1 = await time.clockFromReceipt[mode](delegateTx1);
+
+          // advance blocks
+          await mine(2);
+
+          // holder changes delegation to other2
+          const delegateTx2 = await this.votes.connect(this.holder).delegate(this.other2);
+          const t2 = await time.clockFromReceipt[mode](delegateTx2);
+
+          // advance blocks so that t1 and t2 are in the past
+          await mine(2);
+
+          // old snapshot keeps its original value (other1 had 3 votes)
+          expect(await this.votes.getPastVotes(this.other1, t1)).to.equal(3n);
+          // new snapshot: other1 no longer has votes
+          expect(await this.votes.getPastVotes(this.other1, t2)).to.equal(0n);
+          // new snapshot: other2 now has 3 votes
+          expect(await this.votes.getPastVotes(this.other2, t2)).to.equal(3n);
+
+          // difference for other1: 0 - 3 = -3
+          expect(await this.votes.getPastVotesDifference(this.other1, t1, t2)).to.equal(-3n);
+          // difference for other2: 3 - 0 = 3
+          expect(await this.votes.getPastVotesDifference(this.other2, t1, t2)).to.equal(3n);
+        });
+
+        it('returns the vote difference between two past timepoints after mint', async function () {
+          // holder delegates to other1
+          const delegateTx = await this.votes.connect(this.holder).delegate(this.other1);
+          const t1 = await time.clockFromReceipt[mode](delegateTx);
+
+          // advance blocks
+          await mine(2);
+
+          // mint 1 more token to holder (delegatee gets more votes)
+          const mintTx = await this.votes.$_mint(this.holder, 40n);
+          const t2 = await time.clockFromReceipt[mode](mintTx);
+
+          // advance blocks so that t1 and t2 are in the past
+          await mine(2);
+
+          // old snapshot keeps its original value (3 votes)
+          expect(await this.votes.getPastVotes(this.other1, t1)).to.equal(3n);
+          // new snapshot reflects the mint (4 votes)
+          expect(await this.votes.getPastVotes(this.other1, t2)).to.equal(4n);
+
+          // difference: 4 - 3 = 1
+          expect(await this.votes.getPastVotesDifference(this.other1, t1, t2)).to.equal(1n);
+        });
+
+        it('reverts when querying future timepoints', async function () {
+          // holder delegates to other1
+          const delegateTx = await this.votes.connect(this.holder).delegate(this.other1);
+          const t1 = await time.clockFromReceipt[mode](delegateTx);
+
+          // advance blocks so that t1 is in the past
+          await mine(2);
+
+          const clock = await time.clock[mode]();
+          const futureTimepoint = clock + 100n;
+
+          // future lookup reverts
+          await expect(this.votes.getPastVotesDifference(this.other1, t1, futureTimepoint))
+            .to.be.revertedWithCustomError(this.votes, 'ERC5805FutureLookup')
+            .withArgs(futureTimepoint, clock);
+
+          await expect(this.votes.getPastVotesDifference(this.other1, futureTimepoint, t1))
+            .to.be.revertedWithCustomError(this.votes, 'ERC5805FutureLookup')
+            .withArgs(futureTimepoint, clock);
+        });
+
+        it('returns zero when both timepoints are equal', async function () {
+          // holder delegates to other1
+          const delegateTx = await this.votes.connect(this.holder).delegate(this.other1);
+          const t1 = await time.clockFromReceipt[mode](delegateTx);
+
+          // advance blocks so that t1 is in the past
+          await mine(2);
+
+          // difference with same timepoint is zero
+          expect(await this.votes.getPastVotesDifference(this.other1, t1, t1)).to.equal(0n);
+        });
+      });
     });
   }
 });
