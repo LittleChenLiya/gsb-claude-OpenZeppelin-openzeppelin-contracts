@@ -26,6 +26,11 @@ import {Hashes} from "./Hashes.sol";
  */
 library MerkleProof {
     /**
+     * @dev Sentinel returned by {validateMultiProof} when the multiproof is structurally valid.
+     */
+    uint256 internal constant MULTIPROOF_VALID = type(uint256).max;
+
+    /**
      * @dev The multiproof provided is not valid.
      */
     error MerkleProofInvalidMultiproof();
@@ -134,6 +139,76 @@ library MerkleProof {
         } else {
             return proof[0];
         }
+    }
+<% } -%>
+<%- for (const { suffix, location } of [{ suffix: '', location: 'memory' }, { suffix: 'Calldata', location: 'calldata' }]) { %>
+    /**
+     * @dev Pre-checks the _structure_ of a multiproof without performing any hash computation, and returns the
+     * index of the first `proofFlags` entry that makes the multiproof structurally invalid.
+     *
+     * This version handles multiproofs in <%= location %>.
+     *
+     * Returns {MULTIPROOF_VALID} if the multiproof is structurally valid. In that case, {processMultiProof<%= suffix %>}
+     * does not revert for structural reasons (it may still produce a root that differs from the expected one).
+     * Otherwise, the returned value is the index (in `proofFlags`) of the first step whose reconstruction is
+     * impossible. If the issue is global (i.e. `leaves.length + proof.length != proofFlags.length + 1`, or the
+     * reconstruction ends with unconsumed nodes), the returned value is `proofFlags.length`.
+     *
+     * This pre-check is independent of the hashing function and does NOT replace the root comparison performed by
+     * {multiProofVerify<%= suffix %>}: a structurally valid multiproof can still verify against a different root.
+     *
+     * The _empty set_ (i.e. the case where `proof.length == 1 && leaves.length == 0`) is considered valid, matching
+     * {processMultiProof<%= suffix %>}.
+     */
+    function validateMultiProof<%= suffix %>(
+        bytes32[] <%= location %> proof,
+        bool[] <%= location %> proofFlags,
+        bytes32[] memory leaves
+    ) internal pure returns (uint256) {
+        uint256 leavesLen = leaves.length;
+        uint256 proofFlagsLen = proofFlags.length;
+
+        // Global counting invariant: every flag combines 2 inputs into 1 output, and the reconstruction ends
+        // with a single root.
+        if (leavesLen + proof.length != proofFlagsLen + 1) {
+            return proofFlagsLen;
+        }
+
+        // A multiproof with no flag is a no-op: it consists of a single leaf, or a single element in `proof`.
+        if (proofFlagsLen == 0) {
+            return MULTIPROOF_VALID;
+        }
+
+        // Simulate the reconstruction performed by {processMultiProof<%= suffix %>}, keeping track of the number of
+        // values available in the "main queue" (first the leaves, then the hashes produced at earlier steps) and of
+        // the number of nodes consumed from `proof`. No hashing is performed: only the availability of inputs is
+        // checked, so that the first structurally invalid step can be located.
+        uint256 available = leavesLen;
+        uint256 proofPos = 0;
+        for (uint256 i = 0; i < proofFlagsLen; i++) {
+            // One value from the "main queue" is always needed.
+            if (available == 0) {
+                return i;
+            }
+            available--;
+            if (proofFlags[i]) {
+                // A second value from the "main queue" is needed to merge two branches.
+                if (available == 0) {
+                    return i;
+                }
+                available--;
+            } else {
+                // A node from `proof` is needed as the second value.
+                if (proofPos >= proof.length) {
+                    return i;
+                }
+                proofPos++;
+            }
+            // Combining two values produces one new hash.
+            available++;
+        }
+        // All nodes from `proof` must have been consumed.
+        return proofPos == proof.length ? MULTIPROOF_VALID : proofFlagsLen;
     }
 <% } -%>
 }

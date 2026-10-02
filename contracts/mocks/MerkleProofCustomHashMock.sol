@@ -58,4 +58,20 @@ library MerkleProofCustomHashMock {
     ) internal view returns (bytes32) {
         return MerkleProof.processMultiProofCalldata(proof, proofFlags, leaves, customHash);
     }
+
+    function validateMultiProof(
+        bytes32[] calldata proof,
+        bool[] calldata proofFlags,
+        bytes32[] calldata leaves
+    ) internal pure returns (uint256) {
+        return MerkleProof.validateMultiProof(proof, proofFlags, leaves);
+    }
+
+    function validateMultiProofCalldata(
+        bytes32[] calldata proof,
+        bool[] calldata proofFlags,
+        bytes32[] calldata leaves
+    ) internal pure returns (uint256) {
+        return MerkleProof.validateMultiProofCalldata(proof, proofFlags, leaves);
+    }
 }

@@ -13,6 +13,9 @@ const concatSorted = (...elements) => Buffer.concat(elements.map(ethers.getBytes
 const defaultHash = (a, b) => ethers.keccak256(concatSorted(a, b));
 const customHash = (a, b) => ethers.sha256(concatSorted(a, b));
 
+// Sentinel returned by `validateMultiProof` when the multiproof is structurally valid
+const MULTIPROOF_VALID = ethers.MaxUint256;
+
 describe('MerkleProof', function () {
   for (const { title, contractName, nodeHash } of [
     { title: 'default hash', contractName: '$MerkleProof', nodeHash: defaultHash },
@@ -212,6 +215,165 @@ describe('MerkleProof', function () {
           await expect(
             this.mock.$multiProofVerifyCalldata(maliciousProof, maliciousProofFlags, root, maliciousLeaves),
           ).to.be.revertedWithCustomError(this.mock, 'MerkleProofInvalidMultiproof');
+        });
+      });
+
+      describe('validateMultiProof', function () {
+        // A structurally valid multiproof that verifies against the tree it was built from must be reported as
+        // valid, and its verification result must match the original `multiProofVerify` interface.
+        it('returns the valid sentinel for multiproofs of a valid tree', async function () {
+          const merkleTree = this.makeTree('abcdef');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('bdf'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          expect(await this.mock.$validateMultiProof(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$validateMultiProofCalldata(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+
+          // The pre-check does not replace hash verification: for a valid structure, verify still agrees.
+          expect(await this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.true;
+          expect(await this.mock.$multiProofVerifyCalldata(proof, proofFlags, root, hashes)).to.be.true;
+        });
+
+        it('returns the valid sentinel but verify returns false for a structurally valid multiproof of another tree', async function () {
+          const merkleTree = this.makeTree('abcdef');
+          const otherMerkleTree = this.makeTree('ghi');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = otherMerkleTree.getMultiProof(toLeaves('ghi'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          // Structure is fine, so pre-check passes...
+          expect(await this.mock.$validateMultiProof(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$validateMultiProofCalldata(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+
+          // ...but the rebuilt root differs, so the original interface returns false. Pre-checks are not hash checks.
+          expect(await this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.false;
+          expect(await this.mock.$multiProofVerifyCalldata(proof, proofFlags, root, hashes)).to.be.false;
+        });
+
+        it('locates the first invalid flag when a proof node is missing', async function () {
+          const merkleTree = this.makeTree('abcd');
+
+          const root = merkleTree.root;
+          const hashA = merkleTree.at(0);
+          const hashB = merkleTree.at(1);
+          const hashE = random.bytes32(); // incorrect (not part of the tree)
+          const fill = random.bytes32();
+
+          // Flags 0 and 1 consume the two available proof nodes (`hashB` and `fill`). Flag 2 needs a third one,
+          // but the proof is one node short. The counts still balance (`2 + 2 == 3 + 1`), so this is a positional
+          // failure, not a global one: the first structurally invalid `proofFlags` entry is the one at index 2.
+          const proof = [hashB, fill];
+          const proofFlags = [false, false, false];
+          const hashes = [hashA, hashE];
+
+          expect(await this.mock.$validateMultiProof(proof, proofFlags, hashes)).to.equal(2);
+          expect(await this.mock.$validateMultiProofCalldata(proof, proofFlags, hashes)).to.equal(2);
+
+          // Without the pre-check, the original interface reads past the end of the proof and panics, with no
+          // information about where the structure broke.
+          await expect(this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.revertedWithPanic(
+            PANIC_CODES.ARRAY_ACCESS_OUT_OF_BOUNDS,
+          );
+          await expect(this.mock.$multiProofVerifyCalldata(proof, proofFlags, root, hashes)).to.be.revertedWithPanic(
+            PANIC_CODES.ARRAY_ACCESS_OUT_OF_BOUNDS,
+          );
+        });
+
+        it('locates the first invalid flag when an extra flag forces an unavailable second input', async function () {
+          const merkleTree = this.makeTree('abcd');
+
+          const root = merkleTree.root;
+          const hashA = merkleTree.at(0);
+          const hashB = merkleTree.at(1);
+          const hashCD = nodeHash(merkleTree.at(2), merkleTree.at(3));
+          const hashE = random.bytes32(); // incorrect (not part of the tree)
+          const fill = random.bytes32();
+
+          const proof = [hashB, fill, hashCD];
+          // Extra flag at the end. The counts balance (`2 + 3 == 4 + 1`), but step 3 has no second value available
+          // from the main queue and no proof node left, so flag index 3 is the first structurally invalid one.
+          const proofFlags = [false, false, false, false];
+          const hashes = [hashE, hashA];
+
+          expect(await this.mock.$validateMultiProof(proof, proofFlags, hashes)).to.equal(3);
+          expect(await this.mock.$validateMultiProofCalldata(proof, proofFlags, hashes)).to.equal(3);
+
+          // The original interface reads past the end of the proof and panics.
+          await expect(this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.revertedWithPanic(
+            PANIC_CODES.ARRAY_ACCESS_OUT_OF_BOUNDS,
+          );
+          await expect(this.mock.$multiProofVerifyCalldata(proof, proofFlags, root, hashes)).to.be.revertedWithPanic(
+            PANIC_CODES.ARRAY_ACCESS_OUT_OF_BOUNDS,
+          );
+        });
+
+        it('reports a global issue when the counts of leaves, proof and flags do not add up', async function () {
+          const merkleTree = this.makeTree('abcd');
+
+          const root = merkleTree.root;
+          const fill = random.bytes32();
+
+          // `0 + 2 != 0 + 1`: there is no flag to point at, so a global inconsistency is reported as
+          // `proofFlags.length` (i.e. 0).
+          expect(await this.mock.$validateMultiProof([root, fill], [], [])).to.equal(0);
+          expect(await this.mock.$validateMultiProofCalldata([root, fill], [], [])).to.equal(0);
+
+          await expect(this.mock.$multiProofVerify([root, fill], [], root, [])).to.be.revertedWithCustomError(
+            this.mock,
+            'MerkleProofInvalidMultiproof',
+          );
+        });
+
+        it('locates the first impossible merge in the manipulated zero-value tree fixture', async function () {
+          const leave = ethers.id('real leaf');
+          const root = nodeHash(leave, ethers.ZeroHash);
+
+          const maliciousLeaves = ['malicious', 'leaves']
+            .map(ethers.id)
+            .map(id => ethers.toBeArray(id))
+            .sort(Buffer.compare);
+          const maliciousProof = [leave, leave];
+          const maliciousProofFlags = [true, true, false];
+
+          // Flag 0 merges the two malicious leaves. Flag 1 is also set, but no second value is available in the
+          // main queue at that point: flag index 1 is the first structurally invalid entry.
+          expect(await this.mock.$validateMultiProof(maliciousProof, maliciousProofFlags, maliciousLeaves)).to.equal(1);
+          expect(
+            await this.mock.$validateMultiProofCalldata(maliciousProof, maliciousProofFlags, maliciousLeaves),
+          ).to.equal(1);
+
+          // The original interface silently consumes uninitialized (zero) nodes and only notices the inconsistency
+          // at the end of the reconstruction, when a proof node remains unconsumed.
+          await expect(
+            this.mock.$multiProofVerify(maliciousProof, maliciousProofFlags, root, maliciousLeaves),
+          ).to.be.revertedWithCustomError(this.mock, 'MerkleProofInvalidMultiproof');
+          await expect(
+            this.mock.$multiProofVerifyCalldata(maliciousProof, maliciousProofFlags, root, maliciousLeaves),
+          ).to.be.revertedWithCustomError(this.mock, 'MerkleProofInvalidMultiproof');
+        });
+
+        it('limit case: accepts proving empty leaves from a single proof node', async function () {
+          const merkleTree = this.makeTree('abcd');
+
+          const root = merkleTree.root;
+          expect(await this.mock.$validateMultiProof([root], [], [])).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$validateMultiProofCalldata([root], [], [])).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$multiProofVerify([root], [], root, [])).to.be.true;
+        });
+
+        it('limit case: accepts a tree containing a single leaf', async function () {
+          const merkleTree = this.makeTree('a');
+
+          const root = merkleTree.root;
+          const { proof, proofFlags, leaves } = merkleTree.getMultiProof(toLeaves('a'));
+          const hashes = leaves.map(e => merkleTree.leafHash(e));
+
+          expect(await this.mock.$validateMultiProof(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$validateMultiProofCalldata(proof, proofFlags, hashes)).to.equal(MULTIPROOF_VALID);
+          expect(await this.mock.$multiProofVerify(proof, proofFlags, root, hashes)).to.be.true;
         });
       });
     });
